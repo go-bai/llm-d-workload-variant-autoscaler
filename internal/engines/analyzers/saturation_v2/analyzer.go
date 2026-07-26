@@ -363,15 +363,24 @@ func (a *SaturationAnalyzer) aggregateByVariant(
 			readyCount = 0
 		}
 
+		// replicaCount multiplies perReplicaCapacity to form TotalCapacity. It also
+		// sets VariantCapacity.ReplicaCount, which aggregation.go uses to recompute
+		// supply totals — so both must stay in sync. Defaults to readyCount (pod
+		// count) for the fallback branches, which have no per-instance data.
+		replicaCount := readyCount
+
 		var capacityLabel string
 		if len(replicas) > 0 {
-			// Use median effective capacity from ready pods
+			// len(replicas) counts vLLM engine instances (DP ranks), not pods: a DP=8
+			// pod hosts 8 independently-capacitied instances. Using the pod count would
+			// undercount TotalCapacity by the DP factor.
 			capacities := make([]int64, 0, len(replicas))
 			for _, rc := range replicas {
 				capacities = append(capacities, rc.EffectiveCapacity)
 				totalDemand += float64(rc.ReplicaDemand)
 			}
 			perReplicaCapacity = float64(median(capacities))
+			replicaCount = len(replicas)
 			if accelerator == "" {
 				accelerator = replicas[0].AcceleratorName
 			}
@@ -389,7 +398,7 @@ func (a *SaturationAnalyzer) aggregateByVariant(
 			capacityLabel = satReasonNoData
 		}
 
-		totalCapacity := float64(readyCount) * perReplicaCapacity
+		totalCapacity := float64(replicaCount) * perReplicaCapacity
 
 		var utilization float64
 		if totalCapacity > 0 {
@@ -401,7 +410,7 @@ func (a *SaturationAnalyzer) aggregateByVariant(
 			AcceleratorName:    accelerator,
 			Cost:               cost,
 			Role:               vs.Role,
-			ReplicaCount:       readyCount,
+			ReplicaCount:       replicaCount,
 			PendingReplicas:    vs.PendingReplicas,
 			PerReplicaCapacity: perReplicaCapacity,
 			TotalCapacity:      totalCapacity,
