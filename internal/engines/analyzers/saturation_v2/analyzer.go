@@ -368,6 +368,9 @@ func (a *SaturationAnalyzer) aggregateByVariant(
 		// supply totals — so both must stay in sync. Defaults to readyCount (pod
 		// count) for the fallback branches, which have no per-instance data.
 		replicaCount := readyCount
+		// pendingCount must match replicaCount's unit (SumTotalAnticipatedSupply
+		// adds them); converted to instances below when replicaCount switches.
+		pendingCount := vs.PendingReplicas
 
 		var capacityLabel string
 		if len(replicas) > 0 {
@@ -381,6 +384,22 @@ func (a *SaturationAnalyzer) aggregateByVariant(
 			}
 			perReplicaCapacity = float64(median(capacities))
 			replicaCount = len(replicas)
+			// Convert pending to instance units. readyCount and vs.PendingReplicas
+			// share the scale-target unit (pods for Deployment, groups for LWS), so
+			// len(replicas)/readyCount approximates the instances-per-unit (DP)
+			// factor. This is exact only in steady state: len(replicas) is live
+			// metrics while readyCount is (lagging) scale-target status, so during a
+			// scale-up — when new instances report metrics before their unit is
+			// counted ready — the ratio is inflated and pendingCount overshoots
+			// (understating RequiredCapacity). A metrics-derived instances-per-unit
+			// (grouping by pod/LWS group) would remove this skew; tracked as a
+			// follow-up. TODO: scale-from-zero (readyCount == 0) can't infer DP at
+			// all and is left unconverted here.
+			if readyCount > 0 {
+				if instancesPerUnit := len(replicas) / readyCount; instancesPerUnit > 1 {
+					pendingCount = vs.PendingReplicas * instancesPerUnit
+				}
+			}
 			if accelerator == "" {
 				accelerator = replicas[0].AcceleratorName
 			}
@@ -411,7 +430,7 @@ func (a *SaturationAnalyzer) aggregateByVariant(
 			Cost:               cost,
 			Role:               vs.Role,
 			ReplicaCount:       replicaCount,
-			PendingReplicas:    vs.PendingReplicas,
+			PendingReplicas:    pendingCount,
 			PerReplicaCapacity: perReplicaCapacity,
 			TotalCapacity:      totalCapacity,
 			TotalDemand:        totalDemand,
